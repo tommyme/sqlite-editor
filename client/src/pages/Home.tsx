@@ -34,7 +34,18 @@ export default function Home() {
     toast.success(`Closed: ${tab?.fileName ?? 'database'}`);
   }, [database]);
 
-  const handleExport = useCallback(() => {
+  const handleExport = useCallback(async () => {
+    // If the DB was opened via File System Access API, write back to the original file
+    const saveResult = await sqliteEngine.saveDatabase();
+    if (saveResult.canAutoSave) {
+      if (saveResult.success) {
+        toast.success('Saved to original file');
+      } else {
+        toast.error(`Save failed: ${saveResult.error}`);
+      }
+      return;
+    }
+    // Fallback: download as a new file (Firefox/Safari or fallback input)
     const data = sqliteEngine.exportDatabase();
     if (!data) { toast.error('Failed to export database'); return; }
     const blob = new Blob([data], { type: 'application/octet-stream' });
@@ -46,7 +57,7 @@ export default function Home() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    toast.success('Database exported');
+    toast.success('Database downloaded');
   }, [database.fileName]);
 
   const handleExecuteQuery = useCallback(async (query: string) => {
