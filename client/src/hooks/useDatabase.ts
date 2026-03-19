@@ -28,10 +28,10 @@ export function useDatabase() {
   const activeTab = state.tabs.find(t => t.id === state.activeId) ?? null;
   const isLoaded = state.tabs.length > 0;
 
-  const openDatabase = useCallback(async (file: File) => {
+  const openDatabase = useCallback(async (file: File, handle?: FileSystemFileHandle) => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
-      const id = await sqliteEngine.openDatabase(file);
+      const id = await sqliteEngine.openDatabase(file, handle);
       const tables = sqliteEngine.getTables();
       saveRecentFile(file);
       const newTab: DbTab = {

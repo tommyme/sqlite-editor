@@ -5,7 +5,7 @@ import { useRef } from 'react';
 interface ToolbarProps {
   fileName: string | null;
   isLoaded: boolean;
-  onFileOpen: (file: File) => void;
+  onFileOpen: (file: File, handle?: FileSystemFileHandle) => void;
   onClose: () => void;
   onExport: () => void;
 }
@@ -52,7 +52,7 @@ export function Toolbar({
           multiple: false,
         });
         const file = await fileHandle.getFile();
-        onFileOpen(file);
+        onFileOpen(file, fileHandle);
       } catch (err) {
         // AbortError means user dismissed the dialog — ignore it
         if ((err as Error).name !== 'AbortError') {

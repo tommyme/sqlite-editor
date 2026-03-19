@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import * as sqliteEngine from '@/lib/sqliteEngine';
 
 export interface TableData {
@@ -51,6 +52,7 @@ function inferColumnTypes(
 }
 
 export function useVirtualTable(tableName: string | null, dbKey: string | null = null) {
+  const noAutoSaveWarned = useRef(false);
   const [data, setData] = useState<TableData>({
     columns: [],
     columnTypes: {},
@@ -107,26 +109,40 @@ export function useVirtualTable(tableName: string | null, dbKey: string | null =
   }, [tableName, dbKey, loadTableData]);
 
   const updateCell = useCallback(
-    (rowIndex: number, columnName: string, newValue: string | number | null) => {
+    async (rowIndex: number, columnName: string, newValue: string | number | null) => {
       if (!tableName) return { success: false, error: 'No table selected' };
       const rowid = data.rowids[rowIndex];
       if (rowid === undefined) return { success: false, error: 'Row not found' };
 
       const result = sqliteEngine.updateCell(tableName, rowid, columnName, newValue);
-      if (result.success) {
-        // Update local state immediately (optimistic)
-        setData(prev => {
-          const colIndex = prev.columns.indexOf(columnName);
-          if (colIndex === -1) return prev;
-          const newValues = prev.values.map((row, i) => {
-            if (i !== rowIndex) return row;
-            const newRow = [...row];
-            newRow[colIndex] = newValue;
-            return newRow;
-          });
-          return { ...prev, values: newValues };
+      if (!result.success) return result;
+
+      // Optimistic local state update
+      setData(prev => {
+        const colIndex = prev.columns.indexOf(columnName);
+        if (colIndex === -1) return prev;
+        const newValues = prev.values.map((row, i) => {
+          if (i !== rowIndex) return row;
+          const newRow = [...row];
+          newRow[colIndex] = newValue;
+          return newRow;
         });
+        return { ...prev, values: newValues };
+      });
+
+      // Auto-save back to the original file
+      const saveResult = await sqliteEngine.saveDatabase();
+      if (!saveResult.canAutoSave) {
+        if (!noAutoSaveWarned.current) {
+          noAutoSaveWarned.current = true;
+          toast.info('Changes are in memory only — use Export to save to file');
+        }
+      } else if (saveResult.success) {
+        toast.success('Saved');
+      } else {
+        toast.error(`Save failed: ${saveResult.error}`);
       }
+
       return result;
     },
     [tableName, data.rowids, data.columns]

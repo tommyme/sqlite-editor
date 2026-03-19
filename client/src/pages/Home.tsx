@@ -23,8 +23,8 @@ export default function Home() {
   const [resultExpanded, setResultExpanded] = useState(true);
   const [commandOpen, setCommandOpen] = useState(false);
 
-  const handleFileOpen = useCallback(async (file: File) => {
-    await database.openDatabase(file);
+  const handleFileOpen = useCallback(async (file: File, handle?: FileSystemFileHandle) => {
+    await database.openDatabase(file, handle);
     toast.success(`Opened: ${file.name}`);
   }, [database]);
 

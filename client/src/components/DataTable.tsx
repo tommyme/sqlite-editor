@@ -3,7 +3,6 @@ import { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import { format, parse, isValid } from 'date-fns';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { toast } from 'sonner';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,7 +25,7 @@ interface DataTableProps {
   isLoading: boolean;
   error: string | null;
   tableName: string | null;
-  onCellUpdate: (rowIndex: number, colName: string, value: string | number | null) => { success: boolean; error?: string };
+  onCellUpdate: (rowIndex: number, colName: string, value: string | number | null) => Promise<{ success: boolean; error?: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,18 +237,13 @@ export function DataTable({
 
   const cancelEdit = useCallback(() => setEditingCell(null), []);
 
-  const commitEdit = useCallback((newRawValue: string) => {
+  const commitEdit = useCallback(async (newRawValue: string) => {
     if (!editingCell || !tableName) return;
     const { rowIndex, colIndex } = editingCell;
     const colName = columns[colIndex];
     const finalValue = newRawValue === '' ? null : newRawValue;
-    const result = onCellUpdate(rowIndex, colName, finalValue);
-    if (result.success) {
-      toast.success('Cell updated');
-    } else {
-      toast.error(`Update failed: ${result.error}`);
-    }
     setEditingCell(null);
+    await onCellUpdate(rowIndex, colName, finalValue);
   }, [editingCell, tableName, columns, onCellUpdate]);
 
   // Escape key to cancel from anywhere

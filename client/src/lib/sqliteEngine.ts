@@ -10,6 +10,7 @@ let SQL: any = null;
 interface DbEntry {
   db: SqlJsDatabase;
   fileName: string;
+  fileHandle?: FileSystemFileHandle;
 }
 
 const databases = new Map<string, DbEntry>();
@@ -36,14 +37,41 @@ export async function initSQLite() {
 // ---------------------------------------------------------------------------
 
 /** Opens a file and returns the new DB id. Automatically sets it as active. */
-export async function openDatabase(file: File): Promise<string> {
+export async function openDatabase(file: File, fileHandle?: FileSystemFileHandle): Promise<string> {
   const sql = await initSQLite();
   const buffer = await file.arrayBuffer();
   const db = new sql.Database(new Uint8Array(buffer));
   const id = nanoid(8);
-  databases.set(id, { db, fileName: file.name });
+  databases.set(id, { db, fileName: file.name, fileHandle });
   activeDbId = id;
   return id;
+}
+
+/**
+ * Saves the current in-memory DB back to the original file via File System Access API.
+ * Returns canAutoSave=false if no file handle is available (fallback input or Firefox/Safari).
+ */
+export async function saveDatabase(
+  id?: string
+): Promise<{ success: boolean; canAutoSave: boolean; error?: string }> {
+  const targetId = id ?? activeDbId;
+  if (!targetId) return { success: false, canAutoSave: false, error: 'No database' };
+  const entry = databases.get(targetId);
+  if (!entry) return { success: false, canAutoSave: false, error: 'DB not found' };
+  if (!entry.fileHandle) return { success: false, canAutoSave: false };
+  try {
+    const data = entry.db.export();
+    const writable = await entry.fileHandle.createWritable();
+    await writable.write(data);
+    await writable.close();
+    return { success: true, canAutoSave: true };
+  } catch (err) {
+    return {
+      success: false,
+      canAutoSave: true,
+      error: err instanceof Error ? err.message : 'Write failed',
+    };
+  }
 }
 
 export function setActiveDatabase(id: string): void {
