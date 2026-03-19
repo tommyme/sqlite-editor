@@ -75,49 +75,63 @@ export function removeRecentFile(fileName: string) {
   }
 }
 
-/**
- * 保存查询历史
- */
+export interface QueryHistoryItem {
+  query: string;
+  savedAt: number;
+}
+
+const QUERY_HISTORY_KEY = 'sqlite-editor:queryHistory';
+const LAST_SQL_KEY = 'sqlite-editor:lastSql';
+
 export function saveQueryHistory(query: string) {
   try {
-    const key = 'sqlite-editor:queryHistory';
-    const history = JSON.parse(localStorage.getItem(key) || '[]') as string[];
-    
-    // 去重
-    const filtered = history.filter(q => q !== query);
-    
-    // 新查询放在最前面
-    filtered.unshift(query);
-    
-    // 限制数量
-    const limited = filtered.slice(0, 50);
-    
-    localStorage.setItem(key, JSON.stringify(limited));
+    const history = getQueryHistory();
+    const filtered = history.filter(h => h.query !== query);
+    filtered.unshift({ query, savedAt: Date.now() });
+    localStorage.setItem(QUERY_HISTORY_KEY, JSON.stringify(filtered.slice(0, 50)));
   } catch (error) {
     console.error('Failed to save query history:', error);
   }
 }
 
-/**
- * 获取查询历史
- */
-export function getQueryHistory(): string[] {
+export function getQueryHistory(): QueryHistoryItem[] {
   try {
-    const key = 'sqlite-editor:queryHistory';
-    return JSON.parse(localStorage.getItem(key) || '[]');
-  } catch (error) {
-    console.error('Failed to get query history:', error);
+    const raw = localStorage.getItem(QUERY_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    // Migrate from old string[] format
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
+      return parsed.map((q: string) => ({ query: q, savedAt: 0 }));
+    }
+    return parsed as QueryHistoryItem[];
+  } catch {
     return [];
   }
 }
 
-/**
- * 清除查询历史
- */
+export function removeQueryHistory(query: string) {
+  try {
+    const filtered = getQueryHistory().filter(h => h.query !== query);
+    localStorage.setItem(QUERY_HISTORY_KEY, JSON.stringify(filtered));
+  } catch (error) {
+    console.error('Failed to remove query history:', error);
+  }
+}
+
 export function clearQueryHistory() {
   try {
-    localStorage.removeItem('sqlite-editor:queryHistory');
+    localStorage.removeItem(QUERY_HISTORY_KEY);
   } catch (error) {
     console.error('Failed to clear query history:', error);
   }
+}
+
+export function saveLastSqlContent(sql: string) {
+  try {
+    localStorage.setItem(LAST_SQL_KEY, sql);
+  } catch {}
+}
+
+export function getLastSqlContent(): string {
+  return localStorage.getItem(LAST_SQL_KEY) ?? 'SELECT * FROM ';
 }

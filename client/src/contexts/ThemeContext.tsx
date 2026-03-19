@@ -4,52 +4,48 @@ type Theme = "light" | "dark";
 
 interface ThemeContextType {
   theme: Theme;
-  toggleTheme?: () => void;
-  switchable: boolean;
+  setTheme: (t: Theme) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-interface ThemeProviderProps {
-  children: React.ReactNode;
-  defaultTheme?: Theme;
-  switchable?: boolean;
+function getSystemTheme(): Theme {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-export function ThemeProvider({
-  children,
-  defaultTheme = "light",
-  switchable = false,
-}: ThemeProviderProps) {
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (switchable) {
-      const stored = localStorage.getItem("theme");
-      return (stored as Theme) || defaultTheme;
-    }
-    return defaultTheme;
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [theme, setThemeState] = useState<Theme>(() => {
+    const stored = localStorage.getItem("theme") as Theme | null;
+    return stored ?? getSystemTheme();
   });
 
+  // Apply class to <html>
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === "dark") {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
+    root.classList.toggle("dark", theme === "dark");
+    localStorage.setItem("theme", theme);
+  }, [theme]);
 
-    if (switchable) {
-      localStorage.setItem("theme", theme);
-    }
-  }, [theme, switchable]);
-
-  const toggleTheme = switchable
-    ? () => {
-        setTheme(prev => (prev === "light" ? "dark" : "light"));
+  // Follow system changes (only if no manual override stored)
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => {
+      // Only auto-switch if user hasn't manually overridden
+      if (!localStorage.getItem("theme-manual")) {
+        setThemeState(e.matches ? "dark" : "light");
       }
-    : undefined;
+    };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  const setTheme = (t: Theme) => {
+    localStorage.setItem("theme-manual", "1");
+    setThemeState(t);
+  };
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme, switchable }}>
+    <ThemeContext.Provider value={{ theme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );
@@ -57,8 +53,6 @@ export function ThemeProvider({
 
 export function useTheme() {
   const context = useContext(ThemeContext);
-  if (!context) {
-    throw new Error("useTheme must be used within ThemeProvider");
-  }
+  if (!context) throw new Error("useTheme must be used within ThemeProvider");
   return context;
 }

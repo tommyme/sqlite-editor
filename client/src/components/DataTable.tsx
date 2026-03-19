@@ -1,8 +1,13 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import { format, parse, isValid } from 'date-fns';
+import { Trash2, RotateCcw } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,14 +23,16 @@ interface EditingCell {
 
 interface DataTableProps {
   columns: string[];
-  columnTypes: Record<string, string>;
+  columnTypes?: Record<string, string>;
   values: any[][];
-  rowids: number[];
+  rowids?: number[];
   total: number;
   isLoading: boolean;
   error: string | null;
-  tableName: string | null;
-  onCellUpdate: (rowIndex: number, colName: string, value: string | number | null) => Promise<{ success: boolean; error?: string }>;
+  tableName?: string | null;
+  onCellUpdate?: (rowIndex: number, colName: string, value: string | number | null) => Promise<{ success: boolean; error?: string }>;
+  onRowDelete?: (rowIndices: number[]) => Promise<any>;
+  onRefresh?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,11 +204,14 @@ function DatetimeCellEditor({
 // ---------------------------------------------------------------------------
 
 export function DataTable({
-  columns, columnTypes, values, rowids, total, isLoading, error, tableName, onCellUpdate,
+  columns, columnTypes = {}, values, rowids = [], total, isLoading, error, tableName = null, onCellUpdate, onRowDelete, onRefresh,
 }: DataTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const lastClickedRow = useRef<number | null>(null);
 
   const ROW_HEIGHT = 32;
   const HEADER_HEIGHT = 36;
@@ -246,12 +256,50 @@ export function DataTable({
     await onCellUpdate(rowIndex, colName, finalValue);
   }, [editingCell, tableName, columns, onCellUpdate]);
 
-  // Escape key to cancel from anywhere
+  const handleRowClick = useCallback((rowIndex: number, shiftKey: boolean) => {
+    if (shiftKey && lastClickedRow.current !== null) {
+      const from = Math.min(lastClickedRow.current, rowIndex);
+      const to = Math.max(lastClickedRow.current, rowIndex);
+      setSelectedRows(prev => {
+        const next = new Set(prev);
+        for (let i = from; i <= to; i++) next.add(i);
+        return next;
+      });
+    } else {
+      setSelectedRows(prev => {
+        if (prev.size === 1 && prev.has(rowIndex)) return new Set();
+        return new Set([rowIndex]);
+      });
+      lastClickedRow.current = rowIndex;
+    }
+  }, []);
+
+  // Keyboard shortcuts
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') cancelEdit(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        cancelEdit();
+        setSelectedRows(new Set());
+      }
+      if (e.key === 'Backspace' && selectedRows.size > 0 && !editingCell && onRowDelete) {
+        setDeleteConfirmOpen(true);
+      }
+    };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [cancelEdit]);
+  }, [cancelEdit, selectedRows, editingCell, onRowDelete]);
+
+  // Clear selection when table changes
+  useEffect(() => {
+    setSelectedRows(new Set());
+    lastClickedRow.current = null;
+  }, [tableName]);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (selectedRows.size === 0 || !onRowDelete) return;
+    await onRowDelete(Array.from(selectedRows));
+    setSelectedRows(new Set());
+  }, [selectedRows, onRowDelete]);
 
   if (error) {
     return (
@@ -273,7 +321,48 @@ export function DataTable({
   }
 
   return (
+    <>
+    <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {selectedRows.size > 1 ? `${selectedRows.size} rows` : 'row'}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will permanently delete {selectedRows.size > 1 ? `${selectedRows.size} rows` : `row ${Array.from(selectedRows)[0] !== undefined ? Array.from(selectedRows)[0] + 1 : ''}`} from <strong>{tableName}</strong>. This action cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction autoFocus onClick={handleDeleteConfirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
     <div className="h-full flex flex-col border border-border rounded-md overflow-hidden">
+      {/* Data toolbar */}
+      {tableName && (
+        <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-border bg-muted/30 flex-shrink-0">
+          <button
+            onClick={() => { if (selectedRows.size > 0) setDeleteConfirmOpen(true); }}
+            disabled={selectedRows.size === 0 || !onRowDelete}
+            className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-destructive hover:bg-destructive/10 enabled:cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {selectedRows.size > 1 ? `Delete ${selectedRows.size} rows` : 'Delete row'}
+          </button>
+          <div className="flex-1" />
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium transition-colors text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Refresh
+            </button>
+          )}
+        </div>
+      )}
       <div ref={parentRef} className="flex-1 overflow-auto min-h-0">
         {/* Sticky header */}
         <div
@@ -316,10 +405,11 @@ export function DataTable({
             const row = values[rowIndex];
             return (
               <div key={rowIndex}
-                className="flex absolute top-0 left-0 border-b border-border hover:bg-muted/30 transition-colors"
-                style={{ height: ROW_HEIGHT, width: totalContentWidth, transform: `translateY(${virtualRow.start}px)` }}>
+                className={`flex absolute top-0 left-0 border-b border-border transition-colors cursor-pointer ${selectedRows.has(rowIndex) ? 'bg-primary/10 hover:bg-primary/15' : 'hover:bg-muted/30'}`}
+                style={{ height: ROW_HEIGHT, width: totalContentWidth, transform: `translateY(${virtualRow.start}px)` }}
+                onClick={e => handleRowClick(rowIndex, e.shiftKey)}>
                 {/* Row number */}
-                <div className="flex-shrink-0 flex items-center justify-center border-r border-border bg-muted/20 text-xs text-muted-foreground"
+                <div className={`flex-shrink-0 flex items-center justify-center border-r border-border text-xs text-muted-foreground ${selectedRows.has(rowIndex) ? 'bg-primary/20' : 'bg-muted/20'}`}
                   style={{ width: ROW_NUM_WIDTH }}>
                   {rowIndex + 1}
                 </div>
@@ -365,8 +455,9 @@ export function DataTable({
       <div className="bg-muted border-t border-border px-4 py-1.5 text-xs text-muted-foreground flex items-center gap-2 flex-shrink-0">
         <span>Showing {values.length.toLocaleString()} of {total.toLocaleString()} rows</span>
         {isLoading && <span className="text-primary">Loading…</span>}
-        {tableName && <span className="ml-auto text-muted-foreground/60">Double-click a cell to edit</span>}
+        {tableName && <span className="ml-auto text-muted-foreground/60">Click to select · Double-click to edit</span>}
       </div>
     </div>
+    </>
   );
 }

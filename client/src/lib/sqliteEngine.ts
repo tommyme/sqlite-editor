@@ -135,15 +135,41 @@ export function getTableColumns(tableName: string): Array<{ name: string; type: 
   }
 }
 
-export function executeQuery(sql: string): { columns: string[]; values: any[][]; error?: string } {
+export function executeQuery(sql: string): {
+  columns: string[];
+  values: any[][];
+  rowids: number[];
+  tableName: string | null;
+  error?: string;
+} {
   const db = getActiveDb();
-  if (!db) return { columns: [], values: [], error: 'Database not loaded' };
+  if (!db) return { columns: [], values: [], rowids: [], tableName: null, error: 'Database not loaded' };
   try {
     const result = db.exec(sql);
-    if (result.length === 0) return { columns: [], values: [] };
-    return { columns: result[0].columns, values: result[0].values };
+    if (result.length === 0) return { columns: [], values: [], rowids: [], tableName: null };
+
+    const columns = result[0].columns;
+    const values = result[0].values;
+    let rowids: number[] = [];
+    let tableName: string | null = null;
+
+    // For SELECT queries, try to fetch rowids via a parallel query
+    if (/^\s*SELECT\b/i.test(sql)) {
+      try {
+        const withRowid = sql.trim().replace(/^(SELECT\s+)/i, 'SELECT rowid AS "___r___", ');
+        const r2 = db.exec(withRowid);
+        if (r2.length > 0) {
+          const idx = r2[0].columns.indexOf('___r___');
+          if (idx !== -1) rowids = r2[0].values.map((row: any[]) => row[idx] as number);
+        }
+      } catch {}
+      const m = sql.match(/\bFROM\s+[`"[]?(\w+)[`"\]]?/i);
+      if (m) tableName = m[1];
+    }
+
+    return { columns, values, rowids, tableName };
   } catch (error) {
-    return { columns: [], values: [], error: error instanceof Error ? error.message : 'Unknown error' };
+    return { columns: [], values: [], rowids: [], tableName: null, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
 
@@ -188,6 +214,22 @@ export function updateCell(
     return { success: true };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Update failed' };
+  }
+}
+
+export function deleteRows(
+  tableName: string,
+  rowids: number[]
+): { success: boolean; error?: string } {
+  const db = getActiveDb();
+  if (!db) return { success: false, error: 'No database loaded' };
+  if (rowids.length === 0) return { success: true };
+  try {
+    const placeholders = rowids.map(() => '?').join(', ');
+    db.run(`DELETE FROM \`${tableName}\` WHERE rowid IN (${placeholders})`, rowids);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'Delete failed' };
   }
 }
 

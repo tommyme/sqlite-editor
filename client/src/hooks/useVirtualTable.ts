@@ -148,6 +148,43 @@ export function useVirtualTable(tableName: string | null, dbKey: string | null =
     [tableName, data.rowids, data.columns]
   );
 
+  const deleteRows = useCallback(
+    async (rowIndices: number[]) => {
+      if (!tableName) return { success: false, error: 'No table selected' };
+      const rowids = rowIndices.map(i => data.rowids[i]).filter(id => id !== undefined) as number[];
+      if (rowids.length === 0) return { success: false, error: 'Rows not found' };
+
+      const result = sqliteEngine.deleteRows(tableName, rowids);
+      if (!result.success) {
+        toast.error(`Delete failed: ${result.error}`);
+        return result;
+      }
+
+      const indexSet = new Set(rowIndices);
+      setData(prev => ({
+        ...prev,
+        values: prev.values.filter((_, i) => !indexSet.has(i)),
+        rowids: prev.rowids.filter((_, i) => !indexSet.has(i)),
+        total: prev.total - rowIndices.length,
+      }));
+
+      const saveResult = await sqliteEngine.saveDatabase();
+      if (!saveResult.canAutoSave) {
+        if (!noAutoSaveWarned.current) {
+          noAutoSaveWarned.current = true;
+          toast.info('Changes are in memory only — use Export to save to file');
+        }
+      } else if (saveResult.success) {
+        toast.success(rowIndices.length > 1 ? `${rowIndices.length} rows deleted` : 'Row deleted');
+      } else {
+        toast.error(`Save failed: ${saveResult.error}`);
+      }
+
+      return result;
+    },
+    [tableName, data.rowids]
+  );
+
   const getTableInfo = useCallback(() => {
     if (!tableName) return null;
     const rowCount = sqliteEngine.getTableRowCount(tableName);
@@ -159,6 +196,7 @@ export function useVirtualTable(tableName: string | null, dbKey: string | null =
     ...data,
     loadTableData,
     updateCell,
+    deleteRows,
     getTableInfo,
     pageSize: PAGE_SIZE,
   };

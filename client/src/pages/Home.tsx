@@ -13,6 +13,7 @@ import { useDatabase } from '@/hooks/useDatabase';
 import { useVirtualTable } from '@/hooks/useVirtualTable';
 import { useSqlQuery } from '@/hooks/useSqlQuery';
 import * as sqliteEngine from '@/lib/sqliteEngine';
+import { getLastSqlContent, saveLastSqlContent } from '@/lib/localStorage';
 
 const TAB_TRIGGER = "rounded-none h-10 px-4 text-sm font-medium bg-transparent border-0 border-b-2 border-transparent -mb-px shadow-none transition-colors text-muted-foreground data-[state=active]:text-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent";
 
@@ -22,7 +23,13 @@ export default function Home() {
   const sqlQuery = useSqlQuery();
   const [resultExpanded, setResultExpanded] = useState(true);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [sqlContent, setSqlContent] = useState(() => getLastSqlContent());
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSqlChange = useCallback((value: string) => {
+    setSqlContent(value);
+    saveLastSqlContent(value);
+  }, []);
 
   const handleFileOpen = useCallback(async (file: File, handle?: FileSystemFileHandle) => {
     await database.openDatabase(file, handle);
@@ -39,12 +46,8 @@ export default function Home() {
         let writeHandle: FileSystemFileHandle | undefined;
         try {
           const perm = await (fileHandle as any).requestPermission({ mode: 'readwrite' });
-          console.log('[auto-save] requestPermission result:', perm);
           if (perm === 'granted') writeHandle = fileHandle;
-        } catch (e) {
-          console.log('[auto-save] requestPermission threw:', e);
-        }
-        console.log('[auto-save] writeHandle set to:', writeHandle ? 'FileHandle' : 'undefined');
+        } catch {}
         const file = await fileHandle.getFile();
         await handleFileOpen(file, writeHandle);
       } catch (err) {
@@ -62,17 +65,12 @@ export default function Home() {
   }, [database]);
 
   const handleExport = useCallback(async () => {
-    // If the DB was opened via File System Access API, write back to the original file
     const saveResult = await sqliteEngine.saveDatabase();
     if (saveResult.canAutoSave) {
-      if (saveResult.success) {
-        toast.success('Saved to original file');
-      } else {
-        toast.error(`Save failed: ${saveResult.error}`);
-      }
+      if (saveResult.success) toast.success('Saved to original file');
+      else toast.error(`Save failed: ${saveResult.error}`);
       return;
     }
-    // Fallback: download as a new file (Firefox/Safari or fallback input)
     const data = sqliteEngine.exportDatabase();
     if (!data) { toast.error('Failed to export database'); return; }
     const blob = new Blob([data], { type: 'application/octet-stream' });
@@ -92,6 +90,43 @@ export default function Home() {
     if (result) setResultExpanded(true);
   }, [sqlQuery]);
 
+  // Edit/delete handlers for SQL query result rows
+  const handleResultCellUpdate = useCallback(async (
+    rowIndex: number, colName: string, value: string | number | null
+  ) => {
+    const tbl = sqlQuery.result?.tableName;
+    const rowid = sqlQuery.result?.rowids?.[rowIndex];
+    if (!tbl || rowid === undefined) return { success: false, error: 'Cannot edit this result' };
+    const result = sqliteEngine.updateCell(tbl, rowid, colName, value);
+    if (result.success) {
+      sqlQuery.reExecute();
+      tableData.loadTableData(0);
+      const saveResult = await sqliteEngine.saveDatabase();
+      if (saveResult.success) toast.success('Saved');
+      else if (!saveResult.canAutoSave) toast.info('Changes are in memory only — use Export to save to file');
+    }
+    return result;
+  }, [sqlQuery, tableData]);
+
+  const handleResultRowDelete = useCallback(async (rowIndices: number[]) => {
+    const tbl = sqlQuery.result?.tableName;
+    const rowids = rowIndices
+      .map(i => sqlQuery.result?.rowids?.[i])
+      .filter((id): id is number => id !== undefined);
+    if (!tbl || rowids.length === 0) return { success: false, error: 'Cannot delete from this result' };
+    const result = sqliteEngine.deleteRows(tbl, rowids);
+    if (result.success) {
+      sqlQuery.reExecute();
+      tableData.loadTableData(0);
+      const saveResult = await sqliteEngine.saveDatabase();
+      if (saveResult.success) toast.success(rowIndices.length > 1 ? `${rowIndices.length} rows deleted` : 'Row deleted');
+      else if (!saveResult.canAutoSave) toast.info('Changes are in memory only — use Export to save to file');
+    } else {
+      toast.error(`Delete failed: ${result.error}`);
+    }
+    return result;
+  }, [sqlQuery, tableData]);
+
   return (
     <div className="h-screen flex flex-col bg-background">
       <CommandPalette
@@ -103,7 +138,6 @@ export default function Home() {
         onRefresh={database.refreshTables}
       />
 
-      {/* Fallback file input for browsers without showOpenFilePicker */}
       <input
         ref={fileInputRef}
         type="file"
@@ -124,7 +158,6 @@ export default function Home() {
         onExport={handleExport}
       />
 
-      {/* Database tabs — visible when ≥1 DB is open */}
       {database.tabs.length > 0 && (
         <div className="flex items-end border-b border-border bg-muted/40 px-2 overflow-x-auto flex-shrink-0">
           {database.tabs.map(tab => (
@@ -141,7 +174,6 @@ export default function Home() {
             >
               <Database className="w-3 h-3 shrink-0" />
               <span className="max-w-[140px] truncate">{tab.fileName}</span>
-              {/* Close button */}
               <span
                 role="button"
                 onClick={e => { e.stopPropagation(); handleClose(tab.id); }}
@@ -184,11 +216,18 @@ export default function Home() {
                   error={tableData.error}
                   tableName={database.currentTable}
                   onCellUpdate={tableData.updateCell}
+                  onRowDelete={tableData.deleteRows}
+                  onRefresh={() => tableData.loadTableData(0)}
                 />
               </TabsContent>
 
               <TabsContent value="sql" className="flex-1 overflow-hidden">
-                <SqlEditor onExecute={handleExecuteQuery} isExecuting={sqlQuery.isExecuting} />
+                <SqlEditor
+                  initialValue={sqlContent}
+                  onChange={handleSqlChange}
+                  onExecute={handleExecuteQuery}
+                  isExecuting={sqlQuery.isExecuting}
+                />
               </TabsContent>
             </Tabs>
           </Panel>
@@ -199,11 +238,16 @@ export default function Home() {
             <ResultPanel
               columns={sqlQuery.result?.columns || []}
               values={sqlQuery.result?.values || []}
+              rowids={sqlQuery.result?.rowids}
+              tableName={sqlQuery.result?.tableName}
               error={sqlQuery.error}
               executionTime={sqlQuery.result?.executionTime}
               rowCount={sqlQuery.result?.rowCount}
               isExpanded={resultExpanded}
               onToggleExpand={setResultExpanded}
+              onCellUpdate={sqlQuery.result?.tableName && sqlQuery.result?.rowids?.length ? handleResultCellUpdate : undefined}
+              onRowDelete={sqlQuery.result?.tableName && sqlQuery.result?.rowids?.length ? handleResultRowDelete : undefined}
+              onRefresh={sqlQuery.reExecute}
             />
           </Panel>
         </PanelGroup>
