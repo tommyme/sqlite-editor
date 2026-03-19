@@ -1,101 +1,110 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import * as sqliteEngine from '@/lib/sqliteEngine';
 import { saveRecentFile } from '@/lib/localStorage';
 
-export interface DatabaseState {
-  isLoaded: boolean;
-  fileName: string | null;
+export interface DbTab {
+  id: string;
+  fileName: string;
   tables: string[];
   currentTable: string | null;
-  error: string | null;
+}
+
+export interface DatabaseState {
+  tabs: DbTab[];
+  activeId: string | null;
   isLoading: boolean;
+  error: string | null;
 }
 
 export function useDatabase() {
   const [state, setState] = useState<DatabaseState>({
-    isLoaded: false,
-    fileName: null,
-    tables: [],
-    currentTable: null,
-    error: null,
+    tabs: [],
+    activeId: null,
     isLoading: false,
+    error: null,
   });
 
-  /**
-   * 打开数据库文件
-   */
+  // Derived convenience getters
+  const activeTab = state.tabs.find(t => t.id === state.activeId) ?? null;
+  const isLoaded = state.tabs.length > 0;
+
   const openDatabase = useCallback(async (file: File) => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
-    
     try {
-      await sqliteEngine.openDatabase(file);
+      const id = await sqliteEngine.openDatabase(file);
       const tables = sqliteEngine.getTables();
-      
       saveRecentFile(file);
-      
-      setState(prev => ({
-        ...prev,
-        isLoaded: true,
+      const newTab: DbTab = {
+        id,
         fileName: file.name,
         tables,
-        currentTable: tables.length > 0 ? tables[0] : null,
+        currentTable: tables[0] ?? null,
+      };
+      setState(prev => ({
+        ...prev,
+        tabs: [...prev.tabs, newTab],
+        activeId: id,
         isLoading: false,
       }));
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to open database';
       setState(prev => ({
         ...prev,
         isLoading: false,
-        error: errorMessage,
+        error: error instanceof Error ? error.message : 'Failed to open database',
       }));
     }
   }, []);
 
-  /**
-   * 关闭数据库
-   */
-  const closeDatabase = useCallback(() => {
-    sqliteEngine.closeDatabase();
-    setState({
-      isLoaded: false,
-      fileName: null,
-      tables: [],
-      currentTable: null,
-      error: null,
-      isLoading: false,
+  const closeDatabase = useCallback((id: string) => {
+    sqliteEngine.closeDatabase(id);
+    setState(prev => {
+      const remaining = prev.tabs.filter(t => t.id !== id);
+      // After close, sqliteEngine already picked the next active DB
+      const newActiveId = sqliteEngine.getActiveDbId();
+      return { ...prev, tabs: remaining, activeId: newActiveId };
     });
   }, []);
 
-  /**
-   * 切换当前表
-   */
+  const switchDatabase = useCallback((id: string) => {
+    sqliteEngine.setActiveDatabase(id);
+    setState(prev => ({ ...prev, activeId: id }));
+  }, []);
+
   const selectTable = useCallback((tableName: string) => {
     setState(prev => ({
       ...prev,
-      currentTable: tableName,
+      tabs: prev.tabs.map(t =>
+        t.id === prev.activeId ? { ...t, currentTable: tableName } : t
+      ),
     }));
   }, []);
 
-  /**
-   * 刷新表列表
-   */
   const refreshTables = useCallback(() => {
-    if (state.isLoaded) {
-      const tables = sqliteEngine.getTables();
-      setState(prev => ({
-        ...prev,
-        tables,
-        currentTable: tables.includes(prev.currentTable || '') 
-          ? prev.currentTable 
-          : (tables.length > 0 ? tables[0] : null),
-      }));
-    }
-  }, [state.isLoaded]);
+    const tables = sqliteEngine.getTables();
+    setState(prev => ({
+      ...prev,
+      tabs: prev.tabs.map(t => {
+        if (t.id !== prev.activeId) return t;
+        return {
+          ...t,
+          tables,
+          currentTable: tables.includes(t.currentTable ?? '') ? t.currentTable : (tables[0] ?? null),
+        };
+      }),
+    }));
+  }, []);
 
   return {
     ...state,
+    activeTab,
+    isLoaded,
+    // Convenience aliases used by existing components
+    fileName: activeTab?.fileName ?? null,
+    tables: activeTab?.tables ?? [],
+    currentTable: activeTab?.currentTable ?? null,
     openDatabase,
     closeDatabase,
+    switchDatabase,
     selectTable,
     refreshTables,
   };

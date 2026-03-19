@@ -1,181 +1,155 @@
 import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
+import { nanoid } from 'nanoid';
+
+// ---------------------------------------------------------------------------
+// Engine state — supports multiple open databases
+// ---------------------------------------------------------------------------
 
 let SQL: any = null;
-let db: SqlJsDatabase | null = null;
 
-/**
- * 初始化 SQLite WASM 引擎
- */
+interface DbEntry {
+  db: SqlJsDatabase;
+  fileName: string;
+}
+
+const databases = new Map<string, DbEntry>();
+let activeDbId: string | null = null;
+
+function getActiveDb(): SqlJsDatabase | null {
+  if (!activeDbId) return null;
+  return databases.get(activeDbId)?.db ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+
 export async function initSQLite() {
   if (!SQL) {
-    SQL = await initSqlJs({
-      locateFile: (file: string) => `/sql-wasm.wasm`,
-    });
+    SQL = await initSqlJs({ locateFile: () => `/sql-wasm.wasm` });
   }
   return SQL;
 }
 
-/**
- * 打开数据库文件
- */
-export async function openDatabase(file: File): Promise<SqlJsDatabase | null> {
-  const SQL = await initSQLite();
+// ---------------------------------------------------------------------------
+// Multi-DB management
+// ---------------------------------------------------------------------------
+
+/** Opens a file and returns the new DB id. Automatically sets it as active. */
+export async function openDatabase(file: File): Promise<string> {
+  const sql = await initSQLite();
   const buffer = await file.arrayBuffer();
-  db = new SQL.Database(new Uint8Array(buffer));
-  return db;
+  const db = new sql.Database(new Uint8Array(buffer));
+  const id = nanoid(8);
+  databases.set(id, { db, fileName: file.name });
+  activeDbId = id;
+  return id;
 }
 
-/**
- * 获取当前数据库实例
- */
-export function getDatabase(): SqlJsDatabase | null {
-  return db;
+export function setActiveDatabase(id: string): void {
+  if (databases.has(id)) activeDbId = id;
 }
 
-/**
- * 关闭数据库
- */
-export function closeDatabase() {
-  if (db) {
-    db.close();
-    db = null;
+export function closeDatabase(id?: string): void {
+  const targetId = id ?? activeDbId;
+  if (!targetId) return;
+  databases.get(targetId)?.db.close();
+  databases.delete(targetId);
+  if (activeDbId === targetId) {
+    const remaining = [...databases.keys()];
+    activeDbId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
   }
 }
 
-/**
- * 获取所有表名
- */
+export function getOpenDatabases(): Array<{ id: string; fileName: string }> {
+  return [...databases.entries()].map(([id, { fileName }]) => ({ id, fileName }));
+}
+
+export function getActiveDbId(): string | null {
+  return activeDbId;
+}
+
+// ---------------------------------------------------------------------------
+// Query helpers (all use the currently active DB)
+// ---------------------------------------------------------------------------
+
 export function getTables(): string[] {
+  const db = getActiveDb();
   if (!db) return [];
-  
   const result = db.exec(
     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
   );
-  
   if (result.length === 0) return [];
-  
   return result[0].values.map((row: any[]) => row[0] as string);
 }
 
-/**
- * 获取表的行数
- */
 export function getTableRowCount(tableName: string): number {
+  const db = getActiveDb();
   if (!db) return 0;
-  
   try {
-    const result = db.exec(`SELECT COUNT(*) as count FROM \`${tableName}\``);
-    if (result.length === 0) return 0;
-    return result[0].values[0][0] as number;
-  } catch (error) {
-    console.error(`Failed to get row count for table ${tableName}:`, error);
+    const result = db.exec(`SELECT COUNT(*) FROM \`${tableName}\``);
+    return result.length > 0 ? (result[0].values[0][0] as number) : 0;
+  } catch {
     return 0;
   }
 }
 
-/**
- * 获取表的列信息
- */
 export function getTableColumns(tableName: string): Array<{ name: string; type: string }> {
+  const db = getActiveDb();
   if (!db) return [];
-  
   try {
     const result = db.exec(`PRAGMA table_info(\`${tableName}\`)`);
     if (result.length === 0) return [];
-    
-    return result[0].values.map((row: any[]) => ({
-      name: row[1] as string,
-      type: row[2] as string,
-    }));
-  } catch (error) {
-    console.error(`Failed to get columns for table ${tableName}:`, error);
+    return result[0].values.map((row: any[]) => ({ name: row[1] as string, type: row[2] as string }));
+  } catch {
     return [];
   }
 }
 
-/**
- * 执行 SELECT 查询并返回结果
- */
-export function executeQuery(sql: string): {
-  columns: string[];
-  values: any[][];
-  error?: string;
-} {
-  if (!db) {
-    return { columns: [], values: [], error: 'Database not loaded' };
-  }
-  
+export function executeQuery(sql: string): { columns: string[]; values: any[][]; error?: string } {
+  const db = getActiveDb();
+  if (!db) return { columns: [], values: [], error: 'Database not loaded' };
   try {
     const result = db.exec(sql);
-    
-    if (result.length === 0) {
-      return { columns: [], values: [] };
-    }
-    
-    return {
-      columns: result[0].columns,
-      values: result[0].values,
-    };
+    if (result.length === 0) return { columns: [], values: [] };
+    return { columns: result[0].columns, values: result[0].values };
   } catch (error) {
-    return {
-      columns: [],
-      values: [],
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    return { columns: [], values: [], error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }
 
-/**
- * 获取表数据（支持分页），同时返回每行的 rowid 用于更新操作
- */
 export function getTableData(
   tableName: string,
   limit: number = 1000,
   offset: number = 0
-): {
-  columns: string[];
-  values: any[][];
-  rowids: number[];
-  total: number;
-} {
-  if (!db) {
-    return { columns: [], values: [], rowids: [], total: 0 };
-  }
-
+): { columns: string[]; values: any[][]; rowids: number[]; total: number } {
+  const db = getActiveDb();
+  if (!db) return { columns: [], values: [], rowids: [], total: 0 };
   try {
-    const countResult = db.exec(`SELECT COUNT(*) as count FROM \`${tableName}\``);
+    const countResult = db.exec(`SELECT COUNT(*) FROM \`${tableName}\``);
     const total = countResult.length > 0 ? (countResult[0].values[0][0] as number) : 0;
 
-    // Select rowid alongside data so we can UPDATE specific rows later
     const dataResult = db.exec(
       `SELECT rowid, * FROM \`${tableName}\` LIMIT ${limit} OFFSET ${offset}`
     );
+    if (dataResult.length === 0) return { columns: [], values: [], rowids: [], total };
 
-    if (dataResult.length === 0) {
-      return { columns: [], values: [], rowids: [], total };
-    }
-
-    // First column is rowid — split it out
     const rowids = dataResult[0].values.map((row: any[]) => row[0] as number);
     const columns = dataResult[0].columns.slice(1);
     const values = dataResult[0].values.map((row: any[]) => row.slice(1));
-
     return { columns, values, rowids, total };
-  } catch (error) {
-    console.error(`Failed to get table data for ${tableName}:`, error);
+  } catch {
     return { columns: [], values: [], rowids: [], total: 0 };
   }
 }
 
-/**
- * 更新单元格值
- */
 export function updateCell(
   tableName: string,
   rowid: number,
   columnName: string,
   newValue: string | number | null
 ): { success: boolean; error?: string } {
+  const db = getActiveDb();
   if (!db) return { success: false, error: 'No database loaded' };
   try {
     db.run(
@@ -184,17 +158,10 @@ export function updateCell(
     );
     return { success: true };
   } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Update failed',
-    };
+    return { success: false, error: error instanceof Error ? error.message : 'Update failed' };
   }
 }
 
-/**
- * 导出数据库为 Uint8Array（用于下载）
- */
 export function exportDatabase(): Uint8Array | null {
-  if (!db) return null;
-  return db.export();
+  return getActiveDb()?.export() ?? null;
 }

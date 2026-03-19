@@ -23,7 +23,7 @@ function inferColumnTypes(
   declared: Record<string, string>
 ): Record<string, string> {
   const result = { ...declared };
-  const SAMPLE = 30;
+  const SAMPLE = 5;
 
   columns.forEach((col, colIdx) => {
     const base = (result[col] || '').toUpperCase();
@@ -50,7 +50,7 @@ function inferColumnTypes(
   return result;
 }
 
-export function useVirtualTable(tableName: string | null) {
+export function useVirtualTable(tableName: string | null, dbKey: string | null = null) {
   const [data, setData] = useState<TableData>({
     columns: [],
     columnTypes: {},
@@ -99,12 +99,12 @@ export function useVirtualTable(tableName: string | null) {
         setData(prev => ({ ...prev, isLoading: false, error: errorMessage }));
       }
     },
-    [tableName]
+    [tableName, dbKey]
   );
 
   useEffect(() => {
     loadTableData(0);
-  }, [tableName, loadTableData]);
+  }, [tableName, dbKey, loadTableData]);
 
   const updateCell = useCallback(
     (rowIndex: number, columnName: string, newValue: string | number | null) => {
