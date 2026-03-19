@@ -44,6 +44,7 @@ export async function openDatabase(file: File, fileHandle?: FileSystemFileHandle
   const id = nanoid(8);
   databases.set(id, { db, fileName: file.name, fileHandle });
   activeDbId = id;
+  console.log('[auto-save] openDatabase stored fileHandle:', fileHandle ? 'yes' : 'no');
   return id;
 }
 
@@ -62,7 +63,7 @@ export async function saveDatabase(
   try {
     const data = entry.db.export();
     const writable = await entry.fileHandle.createWritable();
-    await writable.write(data);
+    await writable.write(data.buffer as ArrayBuffer);
     await writable.close();
     return { success: true, canAutoSave: true };
   } catch (err) {
@@ -84,13 +85,13 @@ export function closeDatabase(id?: string): void {
   databases.get(targetId)?.db.close();
   databases.delete(targetId);
   if (activeDbId === targetId) {
-    const remaining = [...databases.keys()];
+    const remaining = Array.from(databases.keys());
     activeDbId = remaining.length > 0 ? remaining[remaining.length - 1] : null;
   }
 }
 
 export function getOpenDatabases(): Array<{ id: string; fileName: string }> {
-  return [...databases.entries()].map(([id, { fileName }]) => ({ id, fileName }));
+  return Array.from(databases.entries()).map(([id, { fileName }]) => ({ id, fileName }));
 }
 
 export function getActiveDbId(): string | null {

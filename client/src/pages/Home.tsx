@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
@@ -22,11 +22,38 @@ export default function Home() {
   const sqlQuery = useSqlQuery();
   const [resultExpanded, setResultExpanded] = useState(true);
   const [commandOpen, setCommandOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileOpen = useCallback(async (file: File, handle?: FileSystemFileHandle) => {
     await database.openDatabase(file, handle);
     toast.success(`Opened: ${file.name}`);
   }, [database]);
+
+  const handleOpenClick = useCallback(async () => {
+    if ('showOpenFilePicker' in window) {
+      try {
+        const [fileHandle] = await (window as any).showOpenFilePicker({
+          types: [{ description: 'SQLite Databases', accept: { 'application/x-sqlite3': ['.sqlite', '.db', '.sqlite3'] } }],
+          multiple: false,
+        });
+        let writeHandle: FileSystemFileHandle | undefined;
+        try {
+          const perm = await (fileHandle as any).requestPermission({ mode: 'readwrite' });
+          console.log('[auto-save] requestPermission result:', perm);
+          if (perm === 'granted') writeHandle = fileHandle;
+        } catch (e) {
+          console.log('[auto-save] requestPermission threw:', e);
+        }
+        console.log('[auto-save] writeHandle set to:', writeHandle ? 'FileHandle' : 'undefined');
+        const file = await fileHandle.getFile();
+        await handleFileOpen(file, writeHandle);
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') console.error('Failed to open file:', err);
+      }
+      return;
+    }
+    fileInputRef.current?.click();
+  }, [handleFileOpen]);
 
   const handleClose = useCallback((id: string) => {
     const tab = database.tabs.find(t => t.id === id);
@@ -76,10 +103,23 @@ export default function Home() {
         onRefresh={database.refreshTables}
       />
 
+      {/* Fallback file input for browsers without showOpenFilePicker */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".sqlite,.db,.sqlite3"
+        className="hidden"
+        aria-hidden="true"
+        onChange={e => {
+          const file = e.target.files?.[0];
+          if (file) { handleFileOpen(file); e.target.value = ''; }
+        }}
+      />
+
       <Toolbar
         fileName={database.fileName}
         isLoaded={database.isLoaded}
-        onFileOpen={handleFileOpen}
+        onOpenClick={handleOpenClick}
         onClose={() => database.activeId && handleClose(database.activeId)}
         onExport={handleExport}
       />
@@ -173,7 +213,7 @@ export default function Home() {
             <h2 className="text-lg font-semibold mb-2">SQLite Editor</h2>
             <p className="text-sm text-muted-foreground mb-6">Open a SQLite database file to get started</p>
             <button
-              onClick={() => (document.querySelector('input[type="file"]') as HTMLInputElement)?.click()}
+              onClick={handleOpenClick}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 transition-colors"
             >
               Open Database
