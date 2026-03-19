@@ -26,8 +26,9 @@ export function DataTable({
   // 固定行高
   const ROW_HEIGHT = 32;
   const HEADER_HEIGHT = 36;
+  const ROW_NUM_WIDTH = 48;
 
-  // 虚拟滚动
+  // 虚拟滚动 — scroll element is the unified outer container
   const rowVirtualizer = useVirtualizer({
     count: values.length,
     getScrollElement: () => parentRef.current,
@@ -45,11 +46,7 @@ export function DataTable({
       if (columnWidths[col]) {
         widths[col] = columnWidths[col];
       } else {
-        // 根据列名长度估算初始宽度
-        const estimatedWidth = Math.max(
-          col.length * 8 + 16,
-          minWidth
-        );
+        const estimatedWidth = Math.max(col.length * 8 + 16, minWidth);
         widths[col] = Math.min(estimatedWidth, maxWidth);
       }
     });
@@ -63,6 +60,11 @@ export function DataTable({
       [columns[colIndex]]: newWidth,
     }));
   };
+
+  // Total content width — used so the sticky header and rows stay aligned
+  const totalContentWidth =
+    ROW_NUM_WIDTH +
+    columns.reduce((sum, col) => sum + (calculatedColumnWidths[col] ?? 80), 0);
 
   if (error) {
     return (
@@ -87,70 +89,67 @@ export function DataTable({
 
   return (
     <div className="h-full flex flex-col border border-border rounded-md overflow-hidden">
-      {/* 表头 */}
-      <div
-        className="bg-muted border-b border-border flex-shrink-0"
-        style={{ height: HEADER_HEIGHT }}
-      >
-        <div className="flex h-full">
+      {/*
+        Single scroll container: handles BOTH horizontal and vertical scrolling.
+        The header is sticky inside it so it stays visible on vertical scroll
+        while moving with the content on horizontal scroll — no separate scrollbar
+        between header and rows.
+      */}
+      <div ref={parentRef} className="flex-1 overflow-auto min-h-0">
+        {/* Sticky header */}
+        <div
+          className="sticky top-0 z-10 bg-muted border-b border-border flex flex-shrink-0"
+          style={{ height: HEADER_HEIGHT, minWidth: totalContentWidth }}
+        >
           {/* 行号列 */}
           <div
-            className="text-xs font-medium px-2 py-2 bg-muted border-r border-b border-border w-12 flex-shrink-0 flex items-center justify-center"
-            style={{ minWidth: 48 }}
+            className="text-xs font-medium bg-muted border-r border-border flex-shrink-0 flex items-center justify-center"
+            style={{ width: ROW_NUM_WIDTH, minWidth: ROW_NUM_WIDTH }}
           >
             <span className="text-xs font-medium text-muted-foreground">#</span>
           </div>
 
           {/* 数据列 */}
-          <div className="flex flex-1 overflow-x-auto">
-            {columns.map((col, colIndex) => (
+          {columns.map((col, colIndex) => (
+            <div
+              key={col}
+              className="text-xs font-medium px-2 bg-muted border-r border-border flex-shrink-0 relative group flex items-center"
+              style={{ width: calculatedColumnWidths[col] }}
+            >
+              <span className="truncate text-xs font-medium">{col}</span>
+
+              {/* 列宽调整手柄 */}
               <div
-                key={col}
-                className="text-xs font-medium px-2 py-2 bg-muted border-r border-b border-border flex-shrink-0 relative group"
-                style={{ width: calculatedColumnWidths[col] }}
-              >
-                <div className="px-2 py-2 truncate text-xs font-medium">
-                  {col}
-                </div>
+                className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-primary/50 opacity-0 group-hover:opacity-100 transition-opacity"
+                onMouseDown={e => {
+                  e.preventDefault();
+                  const startX = e.clientX;
+                  const startWidth = calculatedColumnWidths[col];
 
-                {/* 列宽调整手柄 */}
-                <div
-                  className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-primary/50 opacity-0 group-hover:opacity-100 transition-opacity"
-                  onMouseDown={e => {
-                    e.preventDefault();
-                    const startX = e.clientX;
-                    const startWidth = calculatedColumnWidths[col];
+                  const handleMouseMove = (moveEvent: MouseEvent) => {
+                    const delta = moveEvent.clientX - startX;
+                    const newWidth = Math.max(60, startWidth + delta);
+                    handleColumnResize(colIndex, newWidth);
+                  };
 
-                    const handleMouseMove = (moveEvent: MouseEvent) => {
-                      const delta = moveEvent.clientX - startX;
-                      const newWidth = Math.max(60, startWidth + delta);
-                      handleColumnResize(colIndex, newWidth);
-                    };
+                  const handleMouseUp = () => {
+                    document.removeEventListener('mousemove', handleMouseMove);
+                    document.removeEventListener('mouseup', handleMouseUp);
+                  };
 
-                    const handleMouseUp = () => {
-                      document.removeEventListener('mousemove', handleMouseMove);
-                      document.removeEventListener('mouseup', handleMouseUp);
-                    };
-
-                    document.addEventListener('mousemove', handleMouseMove);
-                    document.addEventListener('mouseup', handleMouseUp);
-                  }}
-                />
-              </div>
-            ))}
-          </div>
+                  document.addEventListener('mousemove', handleMouseMove);
+                  document.addEventListener('mouseup', handleMouseUp);
+                }}
+              />
+            </div>
+          ))}
         </div>
-      </div>
 
-      {/* 数据行（虚拟滚动） */}
-      <div
-        ref={parentRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden"
-      >
+        {/* 虚拟滚动数据区 */}
         <div
           style={{
-            height: `${rowVirtualizer.getTotalSize()}px`,
-            width: '100%',
+            height: rowVirtualizer.getTotalSize(),
+            minWidth: totalContentWidth,
             position: 'relative',
           }}
         >
@@ -161,16 +160,17 @@ export function DataTable({
             return (
               <div
                 key={rowIndex}
-                className="flex absolute top-0 left-0 w-full border-b border-border hover:bg-muted/50 transition-colors"
+                className="flex absolute top-0 left-0 border-b border-border hover:bg-muted/50 transition-colors"
                 style={{
                   height: ROW_HEIGHT,
+                  width: totalContentWidth,
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
                 {/* 行号 */}
                 <div
-                  className="text-sm px-2 py-1 border-r border-border w-12 flex-shrink-0 flex items-center justify-center bg-muted/30"
-                  style={{ minWidth: 48 }}
+                  className="text-sm px-2 border-r border-border flex-shrink-0 flex items-center justify-center bg-muted/30"
+                  style={{ width: ROW_NUM_WIDTH, minWidth: ROW_NUM_WIDTH }}
                 >
                   <span className="text-xs text-muted-foreground">
                     {rowIndex + 1}
@@ -178,26 +178,25 @@ export function DataTable({
                 </div>
 
                 {/* 数据列 */}
-                <div className="flex flex-1">
-                  {columns.map((col, colIndex) => {
-                    const value = row[colIndex];
-                    const displayValue = value === null ? 'NULL' : String(value);
+                {columns.map((col, colIndex) => {
+                  const value = row[colIndex];
+                  const displayValue = value === null ? 'NULL' : String(value);
 
-                    return (
-                      <div
-                        key={colIndex}
-                        className="text-sm px-2 py-1 border-r border-border flex-shrink-0 flex items-center"
-                        style={{
-                          fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-                          width: calculatedColumnWidths[col],
-                        }}
-                        title={displayValue}
-                      >
-                        <span className="truncate text-sm">{displayValue}</span>
-                      </div>
-                    );
-                  })}
-                </div>
+                  return (
+                    <div
+                      key={colIndex}
+                      className="text-sm px-2 border-r border-border flex-shrink-0 flex items-center"
+                      style={{
+                        fontFamily:
+                          "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+                        width: calculatedColumnWidths[col],
+                      }}
+                      title={displayValue}
+                    >
+                      <span className="truncate text-sm">{displayValue}</span>
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
