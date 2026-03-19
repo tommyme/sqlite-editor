@@ -126,7 +126,7 @@ export function executeQuery(sql: string): {
 }
 
 /**
- * 获取表数据（支持分页）
+ * 获取表数据（支持分页），同时返回每行的 rowid 用于更新操作
  */
 export function getTableData(
   tableName: string,
@@ -135,34 +135,59 @@ export function getTableData(
 ): {
   columns: string[];
   values: any[][];
+  rowids: number[];
   total: number;
 } {
   if (!db) {
-    return { columns: [], values: [], total: 0 };
+    return { columns: [], values: [], rowids: [], total: 0 };
   }
-  
+
   try {
-    // 获取总行数
     const countResult = db.exec(`SELECT COUNT(*) as count FROM \`${tableName}\``);
     const total = countResult.length > 0 ? (countResult[0].values[0][0] as number) : 0;
-    
-    // 获取分页数据
+
+    // Select rowid alongside data so we can UPDATE specific rows later
     const dataResult = db.exec(
-      `SELECT * FROM \`${tableName}\` LIMIT ${limit} OFFSET ${offset}`
+      `SELECT rowid, * FROM \`${tableName}\` LIMIT ${limit} OFFSET ${offset}`
     );
-    
+
     if (dataResult.length === 0) {
-      return { columns: [], values: [], total };
+      return { columns: [], values: [], rowids: [], total };
     }
-    
-    return {
-      columns: dataResult[0].columns,
-      values: dataResult[0].values,
-      total,
-    };
+
+    // First column is rowid — split it out
+    const rowids = dataResult[0].values.map((row: any[]) => row[0] as number);
+    const columns = dataResult[0].columns.slice(1);
+    const values = dataResult[0].values.map((row: any[]) => row.slice(1));
+
+    return { columns, values, rowids, total };
   } catch (error) {
     console.error(`Failed to get table data for ${tableName}:`, error);
-    return { columns: [], values: [], total: 0 };
+    return { columns: [], values: [], rowids: [], total: 0 };
+  }
+}
+
+/**
+ * 更新单元格值
+ */
+export function updateCell(
+  tableName: string,
+  rowid: number,
+  columnName: string,
+  newValue: string | number | null
+): { success: boolean; error?: string } {
+  if (!db) return { success: false, error: 'No database loaded' };
+  try {
+    db.run(
+      `UPDATE \`${tableName}\` SET \`${columnName}\` = ? WHERE rowid = ?`,
+      [newValue, rowid]
+    );
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Update failed',
+    };
   }
 }
 

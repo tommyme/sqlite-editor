@@ -119,18 +119,32 @@ export default function Home() {
           {/* 中间：数据表格/SQL 编辑器 */}
           <Panel defaultSize={60} minSize={40}>
             <Tabs defaultValue="data" className="h-full flex flex-col">
-              <TabsList className="w-full justify-start rounded-none border-b border-border bg-background px-4">
-                <TabsTrigger value="data">Data</TabsTrigger>
-                <TabsTrigger value="sql">SQL</TabsTrigger>
+              <TabsList className="h-auto rounded-none border-b border-border bg-transparent p-0 w-full justify-start gap-0 flex-shrink-0">
+                <TabsTrigger
+                  value="data"
+                  className="rounded-none h-10 px-4 text-sm font-medium bg-transparent border-0 border-b-2 border-transparent -mb-px shadow-none transition-colors text-muted-foreground data-[state=active]:text-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent"
+                >
+                  Data
+                </TabsTrigger>
+                <TabsTrigger
+                  value="sql"
+                  className="rounded-none h-10 px-4 text-sm font-medium bg-transparent border-0 border-b-2 border-transparent -mb-px shadow-none transition-colors text-muted-foreground data-[state=active]:text-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent"
+                >
+                  SQL
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="data" className="flex-1 overflow-hidden p-4">
                 <DataTable
                   columns={tableData.columns}
+                  columnTypes={tableData.columnTypes}
                   values={tableData.values}
+                  rowids={tableData.rowids}
                   total={tableData.total}
                   isLoading={tableData.isLoading}
                   error={tableData.error}
+                  tableName={database.currentTable}
+                  onCellUpdate={tableData.updateCell}
                 />
               </TabsContent>
 
