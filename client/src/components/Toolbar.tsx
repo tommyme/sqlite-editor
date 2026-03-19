@@ -51,8 +51,17 @@ export function Toolbar({
           ],
           multiple: false,
         });
+        // Request write permission while still inside the user gesture so
+        // createWritable() works later without triggering a permission prompt.
+        let writeHandle: FileSystemFileHandle | undefined;
+        try {
+          const perm = await (fileHandle as any).requestPermission({ mode: 'readwrite' });
+          if (perm === 'granted') writeHandle = fileHandle;
+        } catch {
+          // Browser may not support requestPermission — proceed without write handle
+        }
         const file = await fileHandle.getFile();
-        onFileOpen(file, fileHandle);
+        onFileOpen(file, writeHandle);
       } catch (err) {
         // AbortError means user dismissed the dialog — ignore it
         if ((err as Error).name !== 'AbortError') {
