@@ -13,6 +13,43 @@ export interface TableData {
 
 const PAGE_SIZE = 1000;
 
+/**
+ * 对 TEXT 类型（或无类型）的列，通过抽样非空值推断其实际语义类型。
+ * 只要前 30 个非空值都符合同一种模式，就将该列标记为对应类型。
+ */
+function inferColumnTypes(
+  columns: string[],
+  values: any[][],
+  declared: Record<string, string>
+): Record<string, string> {
+  const result = { ...declared };
+  const SAMPLE = 30;
+
+  columns.forEach((col, colIdx) => {
+    const base = (result[col] || '').toUpperCase();
+    // 只对 TEXT 或未声明类型的列做推断
+    if (base && base !== 'TEXT') return;
+
+    const sample = values
+      .map(r => r[colIdx])
+      .filter(v => v !== null && v !== undefined && String(v).trim() !== '')
+      .slice(0, SAMPLE)
+      .map(v => String(v));
+
+    if (sample.length === 0) return;
+
+    if (sample.every(v => /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(v))) {
+      result[col] = 'DATETIME';
+    } else if (sample.every(v => /^\d{4}-\d{2}-\d{2}$/.test(v))) {
+      result[col] = 'DATE';
+    } else if (sample.every(v => /^\d{2}:\d{2}(:\d{2})?$/.test(v))) {
+      result[col] = 'TIME';
+    }
+  });
+
+  return result;
+}
+
 export function useVirtualTable(tableName: string | null) {
   const [data, setData] = useState<TableData>({
     columns: [],
@@ -44,8 +81,9 @@ export function useVirtualTable(tableName: string | null) {
       try {
         const result = sqliteEngine.getTableData(tableName, PAGE_SIZE, offset);
         const colInfos = sqliteEngine.getTableColumns(tableName);
-        const columnTypes: Record<string, string> = {};
-        colInfos.forEach(c => { columnTypes[c.name] = c.type; });
+        const declared: Record<string, string> = {};
+        colInfos.forEach(c => { declared[c.name] = c.type; });
+        const columnTypes = inferColumnTypes(result.columns, result.values, declared);
 
         setData({
           columns: result.columns,

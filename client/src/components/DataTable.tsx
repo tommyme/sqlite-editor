@@ -33,20 +33,14 @@ interface DataTableProps {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function detectCellType(columnType: string, value: any): CellType {
+// Column type is pre-inferred at load time (see useVirtualTable.inferColumnTypes),
+// so this function only maps the already-resolved type string to an editor kind.
+function detectCellType(columnType: string): CellType {
   const t = (columnType || '').toUpperCase();
-  const s = value === null || value === undefined ? '' : String(value);
-
   if (t.includes('DATETIME') || t.includes('TIMESTAMP')) return 'datetime';
   if (t === 'DATE') return 'date';
   if (t.includes('TIME')) return 'time';
   if (['INT', 'REAL', 'NUMERIC', 'FLOAT', 'DOUBLE', 'NUMBER'].some(k => t.includes(k))) return 'number';
-
-  // Infer from value when type is generic TEXT / empty
-  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s)) return 'datetime';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return 'date';
-  if (/^\d{2}:\d{2}(:\d{2})?$/.test(s)) return 'time';
-
   return 'text';
 }
 
@@ -340,7 +334,7 @@ export function DataTable({
                   const value = row[colIndex];
                   const displayValue = value === null ? 'NULL' : String(value);
                   const isEditing = editingCell?.rowIndex === rowIndex && editingCell?.colIndex === colIndex;
-                  const cellType = detectCellType(columnTypes[col] || '', value);
+                  const cellType = detectCellType(columnTypes[col] || '');
                   const isNull = value === null;
 
                   return (
