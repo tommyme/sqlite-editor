@@ -37,7 +37,7 @@ jobs:
           grep -o 'https://[^ ]*\.vercel\.app' /tmp/vercel-output.txt | head -1
 
       - name: Deploy to Vercel (Production)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         run: |
           npx vercel deploy --token ${{ secrets.VERCEL_TOKEN }} \
             --scope ${{ vars.VERCEL_ORG_ID }} \
